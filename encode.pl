@@ -8,39 +8,47 @@ use IPC::Open3;
 use File::Basename;
 
 # Default configuration
-my $FORMAT              = 'mp4';
-my $AUDIO_BITRATE       = 192;
-my $QUALITY             = 20;
-my $HD_QUALITY          = 22;
-my $AUDIO_COPY          = 0;
-my $STEREO_ONLY         = 0;
-my $VIDEO_ONLY          = 0;
-my $HEIGHT              = undef();
-my $WIDTH               = undef();
-my $AUDIO_EXCLUDE_REGEX = '\b(?:Chinese|Czech|Deutsch|Espanol|Francais|Italiano|Japanese|Korean|Magyar|Polish|Portugues|Thai|Turkish)\b';
-my $SUB_INCLUDE_REGEX   = '\b(?:English|Unknown|Closed\s+Captions)\b';
-my $FORCE_MP4           = 0;
-my $OUT_DIR             = undef();
-my $MIXDOWN_CODEC       = 'AAC';
-my $MIXDOWN_CHANNELS    = 2.0;
-my $AAC_ENCODER         = 'ffaac';
+my $FORMAT        = 'av_mkv';
+my $AUDIO_BITRATE = 192;
+my $QUALITY       = 20;
+my $HD_QUALITY    = 22;
+my $AUDIO_COPY    = 0;
+my $STEREO_ONLY   = 0;
+my $VIDEO_ONLY    = 0;
+my $HEIGHT        = undef();
+my $WIDTH         = undef();
+my $AUDIO_EXCLUDE_REGEX =
+'\b(?:Chinese|Czech|Deutsch|Espanol|español|Francais|Italiano|Japanese|Korean|Magyar|Polish|Portugues|Russian|Thai|Turkish|Ukrainian)\b';
+my %AUDIO_EXCLUDE_ISO = (
+	'THA' => 1
+);
+my $SUB_INCLUDE_REGEX = '\b(?:English|Unknown|Closed\s+Captions)\b';
+my $FORCE_MP4         = 0;
+my $OUT_DIR           = undef();
+my $MIXDOWN_CODEC     = 'AAC';
+my $MIXDOWN_CHANNELS  = 2.0;
+my $AAC_ENCODER       = 'ffaac';
+my $VIDEO_ENCODER     = 'x265';
+my %ENCODER_OPTS      = (
+	'x264' => [ '--encopts',        'b-adapt=2:rc-lookahead=50' ],
+	'x265' => [ '--encoder-preset', 'medium' ],
+);
 
 # Applicaton configuration
-my $HD_WIDTH         = 1350;
-my $MIN_VIDEO_WIDTH  = 100;
-my $MAX_CROP_DIFF    = .1;
-my $MAX_DURA_DIFF    = 5;
-my $NO_CROP          = 0;
-my @CODEC_ORDER      = ('DTS-HD', 'DTS', 'PCM', 'AC3', $MIXDOWN_CODEC, 'OTHER');
-my %LANG_INCLUDE_ISO = ('639-1' => 1);
-#my $HB_EXEC          = $ENV{'HOME'} . '/bin/video/HandBrakeCLI';
-my $HB_EXEC          = 'HandBrakeCLI';
-my $DEBUG            = 0;
+my $X265_MAX_WIDTH = 1080 * (16 / 9) * 1.1;
+my $HD_WIDTH       = 720 *  (16 / 9) * 1.1;
+my $MIN_VIDEO_WIDTH = 100;
+my $MAX_CROP_DIFF   = .1;
+my $MAX_DURA_DIFF   = 5;
+my $NO_CROP         = 0;
+my @CODEC_ORDER     = ('DTS-HD', 'FLAC', 'TRUEHD', 'PCM', 'DTS', 'E-AC3', 'AC3', 'VORBIS', $MIXDOWN_CODEC, 'OTHER');
+my $HB_EXEC         = $ENV{'HOME'} . '/bin/video/HandBrakeCLI';
+my $DEBUG           = 0;
 
 # General parameters for HandBrake
-#my @video_params = ('--markers', '--large-file', '--optimize', '--encoder', 'x264', '--detelecine', '--decomb', '--loose-anamorphic', '--modulus', '16', '--encopts', 'b-adapt=2:rc-lookahead=50');
-my @video_params = ('--markers', '--large-file', '--optimize', '--encoder', 'x264', '--detelecine', '--decomb', '--loose-anamorphic', '--modulus', '16', '--encoder-preset','medium', '--encoder-tune','film','--encoder-profile','high','--encoder-level','auto', '--encopts', 'b-adapt=2:rc-lookahead=50');
-my @audio_params = ('--audio-copy-mask', 'dtshd,dts,ac3,aac', '--audio-fallback', 'ffac3');
+# Someday we will also --use-opencl, but not today
+my @video_params = ('--markers', '--optimize', '--detelecine', '--decomb', '--auto-anamorphic');
+my @audio_params = ('--audio-copy-mask', 'dtshd,dts,truehd,eac3,ac3,aac', '--audio-fallback', 'eac3');
 
 # Use CoreAudio where available
 my ($OS) = POSIX::uname();
@@ -94,12 +102,18 @@ if ($ENV{'FORCE_MP4'}) {
 
 # Allow overrides for video quality
 if ($ENV{'QUALITY'}) {
+	if (!($ENV{'QUALITY'} =~ /^\d+$/)) {
+		die($0 . ': Invalid QUALITY: ' . $ENV{'QUALITY'} . "\n");
+	}
 	$QUALITY    = $ENV{'QUALITY'};
 	$HD_QUALITY = $ENV{'QUALITY'};
 }
 
 # Allow overrides for audio bitrate
 if ($ENV{'AUDIO_BITRATE'}) {
+	if (!($ENV{'AUDIO_BITRATE'} =~ /^\d+$/)) {
+		die($0 . ': Invalid AUDIO_BITRATE: ' . $ENV{'AUDIO_BITRATE'} . "\n");
+	}
 	$AUDIO_BITRATE = $ENV{'AUDIO_BITRATE'};
 }
 
@@ -107,19 +121,43 @@ if ($ENV{'AUDIO_BITRATE'}) {
 if ($ENV{'OUT_DIR'}) {
 	$OUT_DIR = $ENV{'OUT_DIR'};
 	$OUT_DIR =~ s/\/+$//;
+	if (!-d $OUT_DIR) {
+		die($0 . ': Invalid OUT_DIR: ' . $OUT_DIR . "\n");
+	}
 }
 
 # Allow overrides for video height and width. The default is "same as source".
 if ($ENV{'HEIGHT'}) {
-	push(@video_params, '--maxHeight', $ENV{'HEIGHT'});
+	if (!($ENV{'HEIGHT'} =~ /^\d+$/)) {
+		die($0 . ': Invalid HEIGHT: ' . $ENV{'HEIGHT'} . "\n");
+	}
+	$HEIGHT = $ENV{'HEIGHT'};
+	push(@video_params, '--maxHeight', $HEIGHT);
 }
 if ($ENV{'WIDTH'}) {
-	push(@video_params, '--maxWidth', $ENV{'WIDTH'});
+	if (!($ENV{'WIDTH'} =~ /^\d+$/)) {
+		die($0 . ': Invalid WIDTH: ' . $ENV{'WIDTH'} . "\n");
+	}
+	$WIDTH = $ENV{'WIDTH'};
+	push(@video_params, '--maxWidth', $WIDTH);
 }
 
-# Disable cropping
+# Allow autocrop disable
 if ($ENV{'NO_CROP'}) {
 	$NO_CROP = 1;
+}
+
+# Allow greyscale mode
+if ($ENV{'GREYSCALE'}) {
+	push(@video_params, '--grayscale');
+}
+
+# Allow selection of video encoder
+if ($ENV{'ENCODER'}) {
+	if (!exists($ENCODER_OPTS{ $ENV{'ENCODER'} })) {
+		die($0 . ': Invalid ENCODER: ' . $ENV{'ENCODER'} . "\n");
+	}
+	$VIDEO_ENCODER = $ENV{'ENCODER'};
 }
 
 # Additional arguments for HandBrake, to allow options not supported directly by this script
@@ -182,7 +220,9 @@ if ($title) {
 			if (abs($titles{$title}{'duration'} - $max_duration) < $MAX_DURA_DIFF) {
 				if ($titles{$title}{'aspect'} > $titles{$max_title}{'aspect'}) {
 					$new_max = 1;
-				} elsif ($titles{$title}{'size'}[0] > $titles{$max_title}{'size'}[0] || $titles{$title}{'size'}[1] > $titles{$max_title}{'size'}[1]) {
+				} elsif ($titles{$title}{'size'}[0] > $titles{$max_title}{'size'}[0]
+					|| $titles{$title}{'size'}[1] > $titles{$max_title}{'size'}[1])
+				{
 					$new_max = 1;
 				}
 			} elsif ($titles{$title}{'duration'} > $max_duration) {
@@ -200,13 +240,18 @@ if ($title) {
 }
 
 # Ensure we have an output file name
-# Force MKV output if the output file name is provided and ends in .MKV
+# Force MKV/MP4 output if the output file name is provided and includes an extension
 if (!defined($out_file) || length($out_file) < 1) {
 	$out_file = $in_file;
 } else {
 	my ($force_format) = $out_file =~ /\.(\w{2,4})$/;
-	if (defined($force_format) && lc($force_format) eq 'mkv') {
-		$FORMAT = 'mkv';
+	if (defined($force_format)) {
+		$force_format = lc($force_format);
+		if ($force_format eq 'mkv') {
+			$FORMAT = 'av_mkv';
+		} elsif ($force_format eq 'mp4' || $force_format eq 'm4v') {
+			$FORMAT = 'av_mp4';
+		}
 	}
 }
 
@@ -215,17 +260,11 @@ if ($OUT_DIR) {
 	$out_file = $OUT_DIR . '/' . basename($out_file);
 }
 
-# Keep copies of our defaults so we can reset between tracks
-my $format_default = $FORMAT;
-
 # Encode each title
 foreach my $title (keys(%titles)) {
 	if ($DEBUG) {
 		print STDERR 'Setting options for title: ' . $title . "\n";
 	}
-
-	# Reset
-	$FORMAT = $format_default;
 
 	# Select a title
 	my $scan = $titles{$title};
@@ -260,12 +299,22 @@ foreach my $title (keys(%titles)) {
 		$title_quality = $HD_QUALITY;
 	}
 
+	# Fall back to x264 if the video is larger than $X265_MAX_WIDTH
+	# Even x86 systems have trouble with x265 @ 4k and hardware support is (as of 2017) rare
+	my $encoder = $VIDEO_ENCODER;
+	if ($scan->{'size'}[0] > $X265_MAX_WIDTH && (!defined($WIDTH) || $WIDTH > $X265_MAX_WIDTH)) {
+		$encoder = 'x264';
+	}
+
 	# Detect unlikely autocrop values
 	my $bad_crop = 0;
 	if (   abs($scan->{'crop'}[0] - $scan->{'crop'}[1]) > $scan->{'size'}[0] * $MAX_CROP_DIFF
 		|| abs($scan->{'crop'}[2] - $scan->{'crop'}[3]) > $scan->{'size'}[0] * $MAX_CROP_DIFF)
 	{
-		print STDERR basename($0) . ': Overriding unlikely autocrop values: ' . join(':', @{ $scan->{'crop'} }) . "\n";
+		print STDERR basename($0)
+		  . ': Overriding unlikely autocrop values: '
+		  . join(':', @{ $scan->{'crop'} }) . ': '
+		  . $in_file . "\n";
 		$bad_crop = 1;
 	}
 
@@ -276,17 +325,18 @@ foreach my $title (keys(%titles)) {
 	}
 
 	# Force MKV muxing if the output contains PGS subtitles (there's no support in the MP4 muxer)
+	my $format = $FORMAT;
 	foreach my $track (values(%{ $scan->{'subtitle_selected'} })) {
 		if ($track->{'type'} eq 'PGS') {
-			$FORMAT = 'mkv';
+			$format = 'av_mkv';
 			last;
 		}
 	}
 
-	# Force MKV muxing if the output contains DTS audio (technically MP4 is supported buy QuickTime hates it)
+	# Force MKV muxing if the output contains DTS audio (technically MP4 supports it but QuickTime hates it)
 	foreach my $track (values(%{ $scan->{'audio_selected'} })) {
 		if ($track->{'codec'} =~ /DTS/i) {
-			$FORMAT = 'mkv';
+			$format = 'av_mkv';
 			last;
 		}
 	}
@@ -294,10 +344,10 @@ foreach my $title (keys(%titles)) {
 	# Select a file name extension that matches the format
 	my $title_out_file = $out_file;
 	$title_out_file =~ s/\.(?:\w{2,4}|dvdmedia)$//i;
-	if ($FORMAT eq 'mkv') {
-		$title_out_file .= '.mkv';
-	} else {
+	if ($format eq 'av_mp4') {
 		$title_out_file .= '.m4v';
+	} else {
+		$title_out_file .= '.mkv';
 	}
 
 	# Force the title number into the output file name if there are multiple titles to be encoded
@@ -316,11 +366,16 @@ foreach my $title (keys(%titles)) {
 	push(@args, '--title',   $title);
 	push(@args, '--input',   $in_file);
 	push(@args, '--output',  $title_out_file);
-	push(@args, '--format',  $FORMAT);
+	push(@args, '--format',  $format);
 	push(@args, '--quality', $title_quality);
 	push(@args, '--crop',    join(':', @{ $scan->{'crop'} }));
+	push(@args, '--encoder', $encoder, @{ $ENCODER_OPTS{$encoder} });
 	push(@args, @video_params);
-	push(@args, @subs);
+
+	# Include subtitles if available
+	if (scalar(@subs)) {
+		push(@args, @subs);
+	}
 
 	# Include audio unless specifically excluded
 	if (!$VIDEO_ONLY) {
@@ -365,7 +420,8 @@ sub subOptions($) {
 
 	my %tracks = ();
 	foreach my $track (@{ $scan->{'subtitle'} }) {
-		my ($language, $note, $iso, $text, $type) = $track->{'description'} =~ /^([^\(]+)(?:\s+\(([^\)]+)\))?\s+\(iso(\d+\-\d+)\:\s+\w\w\w\)\s+\((Text|Bitmap)\)\((CC|VOBSUB|PGS|SSA|TX3G|UTF\-\d+)\)/i;
+		my ($language, $note, $iso, $text, $type) = $track->{'description'} =~
+		  /^([^\(]+)(?:\s+\(([^\)]+)\))?\s+\(iso\d+\-\d+\:\s+(\w\w\w)\)\s+\((Text|Bitmap)\)\((CC|VOBSUB|PGS|SSA|TX3G|UTF\-\d+)\)/i;
 		if (!defined($iso)) {
 			print STDERR 'Could not parse subtitle description: ' . $track->{'description'} . "\n";
 			next;
@@ -378,7 +434,7 @@ sub subOptions($) {
 			$text = 0;
 		}
 
-		# Standardize the codes
+		# Normalize the codes
 		$iso  = uc($iso);
 		$type = uc($type);
 
@@ -438,7 +494,8 @@ sub audioOptions($) {
 	# Type the audio tracks
 	my %tracks = ();
 	foreach my $track (@{ $scan->{'audio'} }) {
-		my ($language, $codec, $note, $channels, $iso, $specs) = $track->{'description'} =~ /^([^\(]+)\s+\(([^\)]+)\)\s+(?:\(([^\)]*Commentary[^\)]*)\)\s+)?\((\d+\.\d+\s+ch|Dolby\s+Surround)\)(?:\s+\(iso(\d+\-\d+)\:\s+\w\w\w\))?(?:,\s+(.*))?/;
+		my ($language, $codec, $note, $channels, $iso, $specs) = $track->{'description'} =~
+/^([^\(]+)\s+\(([^\)]+)\)\s+(?:\(([^\)]*Commentary[^\)]*)\)\s+)?\((\d+\.\d+\s+ch|Dolby\s+Surround)\)(?:\s+\(iso\d+\-\d+\:\s+(\w\w\w)\))?(?:,\s+(.*))?/;
 		if (!defined($channels)) {
 			print STDERR 'Could not parse audio description: ' . $track->{'description'} . "\n";
 			next;
@@ -451,7 +508,8 @@ sub audioOptions($) {
 			$channels = 3.1;
 		}
 
-		# Standardize the codec
+		# Normalize the codes
+		$iso  = defined($iso) ? uc($iso) : '';
 		foreach my $code (@CODEC_ORDER) {
 			my $metacode = quotemeta($code);
 			if ($codec =~ /${metacode}/i) {
@@ -498,10 +556,10 @@ sub audioOptions($) {
 		$tracks{ $track->{'index'} } = \%data;
 
 		# Print what we found
-		#if ($DEBUG) {
-			print 'Found audio track: ';
+		if ($DEBUG) {
+			print STDERR 'Found audio track: ';
 			printHash(\%data);
-		#}
+		}
 	}
 
 	# Push the parsed data back up the chain
@@ -516,10 +574,12 @@ sub audioOptions($) {
 	my $mostChannels = 0;
 
 	# Loop point, in case we need to run the selector more than once
-	SELECT_AUDIO:
+  SELECT_AUDIO:
 	foreach my $codec (@CODEC_ORDER) {
 		$bestByCodec{$codec} = findBestAudioTrack(\%tracks, $codec);
-		if (defined($bestByCodec{$codec}) && (!defined($bestCodec) || $mostChannels < $tracks{ $bestByCodec{$codec} }->{'channels'})) {
+		if (defined($bestByCodec{$codec})
+			&& (!defined($bestCodec) || $mostChannels < $tracks{ $bestByCodec{$codec} }->{'channels'}))
+		{
 			$bestCodec    = $codec;
 			$mostChannels = $tracks{ $bestByCodec{$codec} }->{'channels'};
 		}
@@ -535,8 +595,9 @@ sub audioOptions($) {
 	if (!defined($mixdown) || $mixdown < 1) {
 
 		# If we applied an exclude filter, remove it and try again
-		if ($AUDIO_EXCLUDE_REGEX ne 'ACCEPT_ALL') {
+		if ($AUDIO_EXCLUDE_REGEX ne 'ACCEPT_ALL' || scalar(keys(%AUDIO_EXCLUDE_ISO))) {
 			$AUDIO_EXCLUDE_REGEX = 'ACCEPT_ALL';
+			%AUDIO_EXCLUDE_ISO = ();
 			print STDERR "No usable audio tracks found in title. Removing exclude filter...\n";
 			goto SELECT_AUDIO;
 		}
@@ -573,7 +634,11 @@ sub audioOptions($) {
 		foreach my $index (keys(%tracks)) {
 			if (defined($mixdown) && $mixdown == $index && $tracks{$index}->{'channels'} <= $MIXDOWN_CHANNELS) {
 				if ($DEBUG) {
-					print STDERR 'Skipping passthru of track ' . $index . ' since it is already used as the mixdown track and contains only ' . $tracks{$index}->{'channels'} . " channels\n";
+					print STDERR 'Skipping passthru of track '
+					  . $index
+					  . ' since it is already used as the mixdown track and contains only '
+					  . $tracks{$index}->{'channels'}
+					  . " channels\n";
 				}
 				next;
 			} elsif (!$tracks{$index}->{'codec'}) {
@@ -584,6 +649,11 @@ sub audioOptions($) {
 			} elsif (!isValidAudioLanguage($tracks{$index}->{'language'}, $tracks{$index}->{'iso'})) {
 				if ($DEBUG) {
 					print STDERR 'Skipping track ' . $index . ' due to language: ' . $tracks{$index}->{'language'} . "\n";
+				}
+				next;
+			} elsif ($FORCE_MP4 && $tracks{$index}->{'codec'} =~ /DTS/i) {
+				if ($DEBUG) {
+					print STDERR 'Skipping track ' . $index . " due to DTS codec and FORCE_MP4 flag\n";
 				}
 				next;
 			} else {
@@ -632,7 +702,7 @@ sub scan($) {
 
 	# Fork to scan the file
 	my $child_out = '';
-	my $pid = open3('<&STDIN', $child_out, $child_out, $HB_EXEC, '--previews', '30', '--title', '0', '--input', $in_file);
+	my $pid = open3('<&STDIN', $child_out, $child_out, $HB_EXEC, '--previews', '100:0', '--title', '0', '--input', $in_file);
 
 	# Loop through the output
 	my $scan;
@@ -811,9 +881,7 @@ sub findBestAudioTrack($$) {
 sub isValidSubLanguage($) {
 	my ($lang, $iso) = @_;
 
-	if (scalar(keys(%LANG_INCLUDE_ISO)) && $LANG_INCLUDE_ISO{$iso}) {
-		return 1;
-	} elsif ($SUB_INCLUDE_REGEX && $lang =~ /${SUB_INCLUDE_REGEX}/i) {
+	if ($SUB_INCLUDE_REGEX && $lang =~ /${SUB_INCLUDE_REGEX}/i) {
 		return 1;
 	}
 
@@ -823,9 +891,11 @@ sub isValidSubLanguage($) {
 sub isValidAudioLanguage($) {
 	my ($lang, $iso) = @_;
 
-	if (scalar(keys(%LANG_INCLUDE_ISO)) && $LANG_INCLUDE_ISO{$iso}) {
-		return 1;
-	} elsif ($AUDIO_EXCLUDE_REGEX && $lang =~ /${AUDIO_EXCLUDE_REGEX}/i) {
+	if ($AUDIO_EXCLUDE_REGEX && $lang =~ /${AUDIO_EXCLUDE_REGEX}/i) {
+		return 0;
+	}
+
+	if ($AUDIO_EXCLUDE_ISO{$iso}) {
 		return 0;
 	}
 
