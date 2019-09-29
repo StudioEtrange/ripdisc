@@ -44,7 +44,7 @@ echo "Hello.."
 
 # NOTE: this is  here because encode.pl script have hardcoded localtion of HandBrakeCli..
 mkdir -p $HOME/bin/video
-ln -s $(which HandBrakeCLI) $HOME/bin/video/HandBrakeCLI
+ln -s $(which HandBrakeCLI) $HOME/bin/video/HandBrakeCLI 2>/dev/null
 
 
 
@@ -64,7 +64,6 @@ fi
 
 
 if [ "$1" = "iso" ]; then
-
 	ISO_PATH="$2"
 	echo "Mounting ISO from $ISO_PATH to $MOUNT_POINT"
 	mount -o loop -t iso9660 "$ISO_PATH" "$MOUNT_POINT"
@@ -84,7 +83,9 @@ date1=$(date +"%s")
 #AUDIO_EXCLUDE_REGEX="ACCEPT_ALL"
 #AUDIO_EXCLUDE_REGEX='\b(?:Czech|Deutsch|Italiano|Magyar|Polish|Portugues|Thai|Turkish)\b'
 # SUB_INCLUDE_REGEX='\b(?:English|Francais|Unknown|Closed\s+Captions)\b'
-HB_EXEC="$(which HandBrakeCLI)" DEBUG="1" AUDIO_COPY="1" SUB_INCLUDE_REGEX='\b(?:.*)\b' AUDIO_EXCLUDE_REGEX='ACCEPT_ALL' \
+#ENCODER="x264"
+#ENCODER="x265"
+ENCODER="x264" DEBUG="1" AUDIO_COPY="1" AUDIO_EXCLUDE_REGEX='ACCEPT_ALL' \
 $_CURRENT_FILE_DIR/encode.pl "$MOUNT_POINT" "$OUTPUT_FILENAME" main
 
 date2=$(date +"%s")
@@ -93,7 +94,6 @@ echo "Process ended."
 diff=$(($date2-$date1))
 echo "Time elpased : $(($diff / 60)) minutes and $(($diff % 60)) seconds."
 
-ls -al "$OUTPUT_FILENAME"
 
 
 

@@ -47,7 +47,7 @@ my $DEBUG           = 0;
 
 # General parameters for HandBrake
 # Someday we will also --use-opencl, but not today
-my @video_params = ('--markers', '--optimize', '--detelecine', '--decomb', '--auto-anamorphic');
+my @video_params = ('--all-subtitles','--markers', '--optimize', '--detelecine', '--decomb', '--auto-anamorphic');
 my @audio_params = ('--audio-copy-mask', 'dtshd,dts,truehd,eac3,ac3,aac', '--audio-fallback', 'eac3');
 
 # Use CoreAudio where available
